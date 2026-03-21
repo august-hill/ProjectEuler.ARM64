@@ -1,0 +1,5 @@
+# Compiled binaries and object files
+*.o
+main_bench
+main
+*.dSYM/
