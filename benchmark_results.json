@@ -1,0 +1,24 @@
+{
+    "language": "arm64",
+    "platform": "arm64",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+    "timestamp": "2026-03-21T22:19:49Z",
+    "problems": {
+        "001": {
+            "answer": 233168,
+            "time_ns": 0,
+            "iterations": 1000,
+            "peak_rss_bytes": 1294336,
+            "source_lines": 44,
+            "source_bytes": 1559
+        },
+        "010": {
+            "answer": 142913828922,
+            "time_ns": 4689375,
+            "iterations": 100,
+            "peak_rss_bytes": 5373952,
+            "source_lines": 98,
+            "source_bytes": 2528
+        }
+    }
+}
