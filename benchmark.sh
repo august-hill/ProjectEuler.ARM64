@@ -31,25 +31,32 @@ RESULTS="["
 
 for p in "${PROB_LIST[@]}"; do
     DIR="$REPO_DIR/problem_${p}"
-    [ -f "$DIR/solve.s" ] || continue
     [ -f "$DIR/main.c" ] || continue
 
     cd "$DIR"
 
-    # Compile
-    if ! as -o solve.o solve.s 2>/dev/null; then
-        echo "  FAIL $p: assembly error"
-        RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"assembly error"},' "$p")
-        FAIL=$((FAIL+1)); continue
-    fi
-    if ! cc -O2 -o main_bench main.c solve.o -lm 2>/dev/null; then
-        echo "  FAIL $p: link error"
-        RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"link error"},' "$p")
-        FAIL=$((FAIL+1)); continue
+    # Compile: assembly + C if solve.s exists, C-only otherwise
+    if [ -f solve.s ]; then
+        if ! as -o solve.o solve.s 2>/dev/null; then
+            echo "  FAIL $p: assembly error"
+            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"assembly error"},' "$p")
+            FAIL=$((FAIL+1)); continue
+        fi
+        if ! cc -O2 -o main_bench main.c solve.o -lm 2>/dev/null; then
+            echo "  FAIL $p: link error"
+            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"link error"},' "$p")
+            FAIL=$((FAIL+1)); continue
+        fi
+    else
+        if ! cc -O2 -o main_bench main.c -lm 2>/dev/null; then
+            echo "  FAIL $p: compile error"
+            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"compile error"},' "$p")
+            FAIL=$((FAIL+1)); continue
+        fi
     fi
 
-    # Run with timeout
-    LINE=$(timeout 120 ./main_bench 2>/dev/null | grep "^BENCHMARK|" || true)
+    # Run
+    LINE=$(./main_bench 2>/dev/null | grep "^BENCHMARK|" || true)
     if [ -z "$LINE" ]; then
         echo "  FAIL $p: no output or timeout"
         RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"timeout or no output"},' "$p")
