@@ -1,10 +1,13 @@
-#!/bin/bash
-# benchmark.sh - Run all Project Euler ARM64 assembly solutions
+#!/usr/bin/env bash
+# benchmark.sh - Run all Project Euler ARM64 assembly solutions and collect benchmark data
+# Usage: ./benchmark.sh [--problems 1,2,3] [--output results.json]
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 LANG="arm64"
+CC="${CC:-clang}"
 OUTPUT="${REPO_DIR}/benchmark_results.json"
+PROBLEMS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -14,68 +17,157 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-PLATFORM=$(uname -m)
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-PROB_LIST=()
-for d in "$REPO_DIR"/problem_*/; do
-    [ -d "$d" ] || continue
-    num=$(basename "$d" | sed 's/problem_//')
-    PROB_LIST+=("$num")
-done
+if [ -n "$PROBLEMS" ]; then
+    IFS=',' read -ra PROB_LIST <<< "$PROBLEMS"
+else
+    PROB_LIST=()
+    for d in "$REPO_DIR"/problem_*/; do
+        [ -d "$d" ] || continue
+        num=$(basename "$d" | sed 's/problem_//')
+        PROB_LIST+=("$num")
+    done
+fi
 
 IFS=$'\n' PROB_LIST=($(sort <<<"${PROB_LIST[*]}")); unset IFS
 
-PASS=0; FAIL=0
-RESULTS="["
+PLATFORM=$(uname -m)
+COMPILER_VERSION=$($CC --version 2>/dev/null | head -1 || echo "unknown")
+AS_VERSION=$(as --version 2>/dev/null | head -1 || echo "Apple as (macOS)")
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-for p in "${PROB_LIST[@]}"; do
-    DIR="$REPO_DIR/problem_${p}"
-    [ -f "$DIR/main.c" ] || continue
+echo "Project Euler ARM64 Assembly Benchmarks"
+echo "========================================"
+echo "Platform: $PLATFORM | Assembler: $AS_VERSION | CC: $COMPILER_VERSION"
+echo "Problems: ${#PROB_LIST[@]}"
+echo ""
 
-    cd "$DIR"
+RESULTS_JSON="{\"language\":\"$LANG\",\"platform\":\"$PLATFORM\",\"compiler\":\"$AS_VERSION + $COMPILER_VERSION\",\"timestamp\":\"$TIMESTAMP\",\"problems\":{"
+
+FIRST=true
+PASS=0
+FAIL=0
+
+for NUM in "${PROB_LIST[@]}"; do
+    PROB_DIR="$REPO_DIR/problem_$NUM"
+
+    if [ ! -f "$PROB_DIR/main.c" ]; then
+        echo "  SKIP $NUM: no main.c"
+        continue
+    fi
+
+    cd "$PROB_DIR"
 
     # Compile: assembly + C if solve.s exists, C-only otherwise
     if [ -f solve.s ]; then
         if ! as -o solve.o solve.s 2>/dev/null; then
-            echo "  FAIL $p: assembly error"
-            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"assembly error"},' "$p")
-            FAIL=$((FAIL+1)); continue
+            echo "  FAIL $NUM: assembly error"
+            FAIL=$((FAIL + 1))
+            if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
+            RESULTS_JSON+="\"$NUM\":{\"status\":\"fail\",\"error\":\"assembly error\"}"
+            continue
         fi
-        if ! cc -O2 -o main_bench main.c solve.o -lm 2>/dev/null; then
-            echo "  FAIL $p: link error"
-            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"link error"},' "$p")
-            FAIL=$((FAIL+1)); continue
+        if ! $CC -O2 -o main_bench main.c solve.o -lm 2>/dev/null; then
+            echo "  FAIL $NUM: link error"
+            FAIL=$((FAIL + 1))
+            if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
+            RESULTS_JSON+="\"$NUM\":{\"status\":\"fail\",\"error\":\"link error\"}"
+            continue
         fi
     else
-        if ! cc -O2 -o main_bench main.c -lm 2>/dev/null; then
-            echo "  FAIL $p: compile error"
-            RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"compile error"},' "$p")
-            FAIL=$((FAIL+1)); continue
+        if ! $CC -O2 -o main_bench main.c -lm 2>/dev/null; then
+            echo "  FAIL $NUM: compile error"
+            FAIL=$((FAIL + 1))
+            if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
+            RESULTS_JSON+="\"$NUM\":{\"status\":\"fail\",\"error\":\"compile error\"}"
+            continue
         fi
     fi
 
-    # Run
-    LINE=$(./main_bench 2>/dev/null | grep "^BENCHMARK|" || true)
-    if [ -z "$LINE" ]; then
-        echo "  FAIL $p: no output or timeout"
-        RESULTS+=$(printf '{"problem":"%s","status":"fail","reason":"timeout or no output"},' "$p")
-        FAIL=$((FAIL+1)); continue
+    # Run with /usr/bin/time for RSS
+    TIME_OUT=$(mktemp)
+    PROG_OUT=$(mktemp)
+
+    /usr/bin/time -l ./main_bench >"$PROG_OUT" 2>"$TIME_OUT" || true
+
+    BENCH_LINE=$(grep '^BENCHMARK|' "$PROG_OUT" 2>/dev/null || echo "")
+
+    if [ -z "$BENCH_LINE" ]; then
+        echo "  FAIL $NUM: no BENCHMARK line"
+        rm -f main_bench solve.o "$TIME_OUT" "$PROG_OUT"
+        FAIL=$((FAIL + 1))
+        if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
+        RESULTS_JSON+="\"$NUM\":{\"status\":\"fail\",\"error\":\"no output\"}"
+        continue
     fi
 
-    ANSWER=$(echo "$LINE" | sed 's/.*answer=\([^|]*\).*/\1/')
-    TIME_NS=$(echo "$LINE" | sed 's/.*time_ns=\([^|]*\).*/\1/')
-    ITERS=$(echo "$LINE" | sed 's/.*iterations=\([^|]*\).*/\1/')
-    echo "  PASS $p: answer=$ANSWER time=${TIME_NS}ns"
-    RESULTS+=$(printf '{"problem":"%s","status":"pass","answer":%s,"time_ns":%s,"iterations":%s},' "$p" "$ANSWER" "$TIME_NS" "$ITERS")
-    PASS=$((PASS+1))
+    ANSWER=$(echo "$BENCH_LINE" | sed 's/.*answer=\([^|]*\).*/\1/')
+    TIME_NS=$(echo "$BENCH_LINE" | sed 's/.*time_ns=\([^|]*\).*/\1/')
+    ITERS=$(echo "$BENCH_LINE" | sed 's/.*iterations=\([^|]*\).*/\1/')
+
+    PEAK_RSS=$(grep "maximum resident set size" "$TIME_OUT" 2>/dev/null | awk '{print $1}' || echo "0")
+
+    # Source metrics: count both .s and .c files
+    SLOC=0; SBYTES=0
+    for sf in main.c solve.s; do
+        if [ -f "$sf" ]; then
+            SLOC=$((SLOC + $(wc -l < "$sf" | tr -d ' ')))
+            SBYTES=$((SBYTES + $(wc -c < "$sf" | tr -d ' ')))
+        fi
+    done
+
+    if [ "$TIME_NS" -lt 1000 ] 2>/dev/null; then
+        DISPLAY_TIME="${TIME_NS} ns"
+    elif [ "$TIME_NS" -lt 1000000 ] 2>/dev/null; then
+        DISPLAY_TIME="$(echo "scale=1; $TIME_NS / 1000" | bc) us"
+    elif [ "$TIME_NS" -lt 1000000000 ] 2>/dev/null; then
+        DISPLAY_TIME="$(echo "scale=1; $TIME_NS / 1000000" | bc) ms"
+    else
+        DISPLAY_TIME="$(echo "scale=2; $TIME_NS / 1000000000" | bc) s"
+    fi
+
+    echo "  $NUM: answer=$ANSWER  time=$DISPLAY_TIME  rss=${PEAK_RSS}B  sloc=$SLOC"
+
+    if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
+    RESULTS_JSON+="\"$NUM\":{\"answer\":$ANSWER,\"time_ns\":$TIME_NS,\"iterations\":$ITERS,\"peak_rss_bytes\":$PEAK_RSS,\"source_lines\":$SLOC,\"source_bytes\":$SBYTES}"
+
+    PASS=$((PASS + 1))
+    rm -f main_bench solve.o "$TIME_OUT" "$PROG_OUT"
 done
 
-RESULTS="${RESULTS%,}]"
-cat > "$OUTPUT" <<JEOF
-{"language":"$LANG","platform":"$PLATFORM","timestamp":"$TIMESTAMP","results":$RESULTS}
-JEOF
+RESULTS_JSON+="}}"
+
+echo "$RESULTS_JSON" | python3 -m json.tool > "$OUTPUT" 2>/dev/null || echo "$RESULTS_JSON" > "$OUTPUT"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 echo "Written to: $OUTPUT"
+
+# Generate BENCHMARKS.md
+python3 -c "
+import json
+with open('$OUTPUT') as f:
+    data = json.load(f)
+lines = ['# ARM64 Assembly Benchmarks\n']
+lines.append(f'Platform: {data[\"platform\"]} | Compiler: {data[\"compiler\"]} | Date: {data[\"timestamp\"][:10]}\n')
+lines.append('| # | Answer | Time | Peak RSS | SLOC |')
+lines.append('|---|--------|------|----------|------|')
+problems = data.get('problems', {})
+total_ns = 0
+for prob in sorted(problems.keys()):
+    p = problems[prob]
+    if 'time_ns' not in p: continue
+    ns = p['time_ns']
+    total_ns += ns
+    if ns < 1000: t = f'{ns} ns'
+    elif ns < 1000000: t = f'{ns/1000:.1f} us'
+    elif ns < 1000000000: t = f'{ns/1000000:.1f} ms'
+    else: t = f'{ns/1000000000:.2f} s'
+    rss_mb = p.get('peak_rss_bytes', 0) / (1024*1024)
+    lines.append(f'| {prob} | {p[\"answer\"]} | {t} | {rss_mb:.1f} MB | {p[\"source_lines\"]} |')
+lines.append(f'\n## Summary\n')
+lines.append(f'- Problems benchmarked: {len([p for p in problems.values() if \"time_ns\" in p])}')
+lines.append(f'- Total time: {total_ns/1e9:.2f}s')
+with open('$REPO_DIR/BENCHMARKS.md', 'w') as f:
+    f.write('\n'.join(lines))
+print('Generated BENCHMARKS.md')
+" 2>/dev/null || echo "BENCHMARKS.md generation skipped"
