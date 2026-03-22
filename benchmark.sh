@@ -128,7 +128,7 @@ for NUM in "${PROB_LIST[@]}"; do
     echo "  $NUM: answer=$ANSWER  time=$DISPLAY_TIME  rss=${PEAK_RSS}B  sloc=$SLOC"
 
     if [ "$FIRST" = true ]; then FIRST=false; else RESULTS_JSON+=","; fi
-    RESULTS_JSON+="\"$NUM\":{\"answer\":$ANSWER,\"time_ns\":$TIME_NS,\"iterations\":$ITERS,\"peak_rss_bytes\":$PEAK_RSS,\"source_lines\":$SLOC,\"source_bytes\":$SBYTES}"
+    RESULTS_JSON+="\"$NUM\":{\"answer\":$ANSWER,\"time_ns\":$TIME_NS,\"iterations\":$ITERS,\"status\":\"pass\",\"peak_rss_bytes\":$PEAK_RSS,\"source_lines\":$SLOC,\"source_bytes\":$SBYTES}"
 
     PASS=$((PASS + 1))
     rm -f main_bench solve.o "$TIME_OUT" "$PROG_OUT"
