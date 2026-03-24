@@ -1,5 +1,6 @@
 // Problem 173: Using up to one million tiles how many hollow square laminae can be formed?
 // Answer: 1572729
+#include <math.h>
 #include "../bench.h"
 
 long long solve(void) {
@@ -14,8 +15,8 @@ long long solve(void) {
         long long m_sq_min = n * n - limit;
         long long actual_m_min = m_min;
         if (m_sq_min > 0) {
-            actual_m_min = 1;
-            while (actual_m_min * actual_m_min < m_sq_min) actual_m_min++;
+            actual_m_min = (long long)sqrt((double)m_sq_min);
+            if (actual_m_min * actual_m_min < m_sq_min) actual_m_min++;
         }
         if (actual_m_min < m_min) actual_m_min = m_min;
         if ((actual_m_min % 2) != (n % 2)) actual_m_min++;
