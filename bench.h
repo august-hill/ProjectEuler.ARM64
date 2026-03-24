@@ -29,7 +29,15 @@ static int cmp_ll(const void *a, const void *b) {
 
 static void euler_bench(int problem, long long (*fn)(void)) {
     // Warmup
-    for (int i = 0; i < 3; i++) {
+    // Cold start: first run, no warmup
+    long long cold_t0 = get_ns();
+    volatile long long cold_r = fn();
+    (void)cold_r;
+    long long cold_ns = get_ns() - cold_t0;
+    printf("COLDSTART|time_ns=%lld\n", cold_ns);
+
+    // Warmup: 2 more runs
+    for (int i = 0; i < 2; i++) {
         volatile long long r = fn();
         (void)r;
     }
